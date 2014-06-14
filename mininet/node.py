@@ -189,6 +189,7 @@ class Node( object ):
             os.killpg( self.pid, signal.SIGKILL )
         self.cleanup()
 
+
     def stop( self ):
         "Stop node."
         self.terminate()
@@ -728,20 +729,91 @@ class CPULimitedHost( Host ):
 class HostWithPrivateDirs( Host ):
     "Host with private directories"
 
-    def __init__(self, *args, **kwargs ):
+    mnRunDir = '/run/mn'
+
+    def __init__(self, name, mountGroup=None, states=None, persistent=True,*args, **kwargs ):
         """privateDirs: list of private directories"""
-
+        self.states = states
+        self.hostAssignments = {}
+        self.group = mountGroup
+        self.persistent = persistent
         self.privateDirs = kwargs.pop( 'privateDirs', [] )
-        Host.__init__( self, *args, **kwargs )
-        self.mountPrivateDirs()
+        Host.__init__( self, name, *args, **kwargs )
+        self.rundir = '%s/%s' % (self.mnRunDir, name )
+        if self.group:
+            self.mountGroup()
+        elif self.states:
+            self.parseStates( name )
+        elif self.persistent:
+            self.mountPersistentPrivateDirs()
+        else:
+            self.mountTempPrivateDirs() 
 
-    def mountPrivateDirs( self ):
+    def parseStates( self, name ):
+        """load machine states into speific hosts.
+        if no machine state exists, create a new state"""
+        for host in self.states:
+            if host == name:
+                stateDir = ( '%s/states/%s' %( self.mnRunDir, self.states[ host ] ) )
+                self.cmd( 'mkdir -p', stateDir )
+                self.cmd( 'touch %s/state.conf' %stateDir )
+                self.loadState( self.states[ host ] )  
+        if name not in self.states:
+            self.mountPersistentPrivateDirs()
+
+    def loadState( self, state ):
+        "mount the state specified in the current host"
+        stateConf = ( '%s/states/%s/state.conf' %( self.mnRunDir, state ) )
+        configuration = self.cmd( 'cat %s' %stateConf )
+        if not configuration:
+            self.cmd( 'echo %s >> %s' %( self.privateDirs, stateConf ) )
+            for directory in self.privateDirs:
+                stateDir = ( '%s/states/%s%s' %( self.mnRunDir, state, directory ) )
+                self.cmd( 'mkdir -p %s' %directory )
+                self.cmd( 'mkdir -p %s' %stateDir )
+                self.cmd( 'mount --bind %s %s' %( stateDir, directory ) )
+
+        else:
+            dirList =  configuration.strip( '[]\n' ).split( ',' )
+            for index, dir in enumerate( dirList ):
+                dirList[ index ] = dir.strip()
+                directory = ( '%s/states/%s%s' %( self.mnRunDir, state, dirList[ index ] ) )
+                self.cmd( 'mkdir -p %s' %directory )
+                self.cmd( 'mkdir -p %s' %dirList[ index ] )
+                self.cmd( 'mount --bind %s %s' %( directory, dirList[ index ] ) )
+                
+
+    def mountGroup( self ):
+        "create different persistent groups of directories"
+        suffix = '.' + self.group
+        self.mountDirs( self.privateDirs, self.rundir, suffix )
+        #for directory in self.privateDirs:
+        #    privateDir = self.rundir + directory + suffix
+        #    self.cmd( 'mkdir -p ' + privateDir )
+        #    self.cmd( 'mkdir -p ' + directory )
+        #    self.cmd( 'mount --bind %s %s' %( privateDir, directory ) )
+
+    def mountPersistentPrivateDirs( self ):
+        "Mount each private directory, which will be persistent accross boots"
+        self.mountDirs( self.privateDirs, self.rundir )
+        #for directory in self.privateDirs:
+        #    privateDir = self.rundir + directory
+        #    self.cmd( 'mkdir -p ' + privateDir )
+        #    self.cmd( 'mkdir -p ' + directory )
+        #    self.cmd( 'mount --bind %s %s' %( privateDir, directory ) )
+
+    def mountTempPrivateDirs( self ):
         "Mount tmpfs for each private directory"
-        for dir_ in self.privateDirs:
-            self.cmd( 'mkdir -p ' + dir_ )
-            self.cmd( 'mount -n -t tmpfs tmpfs %s' % dir_ )
+        for directory in self.privateDirs:
+            self.cmd( 'mkdir -p ' + directory )
+            self.cmd( 'mount -n -t tmpfs tmpfs %s' % directory )
 
-
+    def mountDirs( self, privateDirectories, base, suffix="" ):
+        "mount a private directory for a host"
+        for directory in privateDirectories:
+            self.cmd( 'mkdir -p ' + directory )
+            self.cmd( 'mkdir -p ' + base + directory + suffix )
+            self.cmd( 'mount --bind %s %s' %( base + directory + suffix, directory ) )
 
 # Some important things to note:
 #

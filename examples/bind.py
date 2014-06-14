@@ -21,7 +21,15 @@ def testHostWithPrivateDirs():
     "Test bind mounts"
     topo = SingleSwitchTopo( 10 )
     privateDirs = [ '/var/log', '/var/run' ]
+    states = {}
+    states[ 'h3' ] = 'ovx'
+    states[ 'h2' ] = 'onos'
+    states[ 'h1' ] = 'onos'
+    
     host = partial( HostWithPrivateDirs,
+                    #mountGroup='ovx',
+                    states=states,
+                    #persistent=False,
                     privateDirs=privateDirs )
     net = Mininet( topo=topo, host=host )
     net.start()
