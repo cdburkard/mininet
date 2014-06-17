@@ -13,3 +13,10 @@ index 41f2547..6eec590 100644
  
  struct switch_ {
      struct lswitch *lswitch;
+
+57a58,59
+ #include "sys/socket.h"
+ 
+152a155,156
+             int option = 1;
+             setsocketopt( listeners[ i ], SOL_SOCKET, SO_REUSEADDR, (char *)&option, sizeof(option) )
