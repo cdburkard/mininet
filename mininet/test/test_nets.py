@@ -38,6 +38,12 @@ class testSingleSwitchCommon( object ):
 
 class testSingleSwitchOVSKernel( testSingleSwitchCommon, unittest.TestCase ):
     "Test ping with single switch topology (OVS kernel switch)."
+    def setUp(self):
+       #poll ss utility for TIME-WAIT(ss -o TIME-WAIT) and dont continue until the controller has quit
+       while ( True ):
+           sockets = quietRun( 'ss state TIME-WAIT' )
+           if not '6633' in sockets:
+               break
     switchClass = OVSSwitch
 
 class testSingleSwitchOVSUser( testSingleSwitchCommon, unittest.TestCase ):
@@ -63,7 +69,6 @@ class testLinearCommon( object ):
     "Test all-pairs ping with LinearNet (common code)."
 
     switchClass = None # overridden in subclasses
-
     def testLinear5( self ):
         "Ping test on a 5-switch topology"
         mn = Mininet( LinearTopo( k=5 ), self.switchClass, Host, Controller )
@@ -75,6 +80,7 @@ class testLinearCommon( object ):
 
 class testLinearOVSKernel( testLinearCommon, unittest.TestCase ):
     "Test all-pairs ping with LinearNet (OVS kernel switch)."
+
     switchClass = OVSSwitch
 
 class testLinearOVSUser( testLinearCommon, unittest.TestCase ):
