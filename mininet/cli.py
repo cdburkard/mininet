@@ -337,26 +337,38 @@ class CLI( Cmd ):
         Past the first CLI argument, node names are automatically replaced with
         corresponding IP addrs."""
 
-        first, args, line = self.parseline( line )
+
+        line = line.strip()
+        cmd = line.split()
+        first = cmd[0]
+        args = cmd[ 1: ]
 
         if first in self.mn:
             if not args:
                 print "*** Enter a command for node: %s <cmd>" % first
                 return
+
             node = self.mn[ first ]
-            rest = args.split( ' ' )
+            rest = args
             # Substitute IP addresses for node names in command
             # If updateIP() returns None, then use node name
-            rest = [ self.mn[ arg ].defaultIntf().updateIP() or arg
+            rest = [ self.mn[ arg ].defaultIntf().updateIP() or arg 
                      if arg in self.mn else arg
                      for arg in rest ]
+
+
             rest = ' '.join( rest )
+
             # Run cmd on node:
             builtin = isShellBuiltin( first )
-            node.sendCmd( rest, printPid=( not builtin ) )
+            print "sending command"
+            node.sendCmd( rest, printPid=( builtin ) )
+            print "sent command, waiting for node"
             self.waitForNode( node )
+            print "finished waiting for node"
         else:
             error( '*** Unknown command: %s\n' % line )
+            #print usage message here
 
     # pylint: enable-msg=R0201
 
@@ -371,6 +383,7 @@ class CLI( Cmd ):
         if self.isatty():
             # Buffer by character, so that interactive
             # commands sort of work
+            print "caught tty"
             quietRun( 'stty -icanon min 1' )
         while True:
             try:
@@ -385,7 +398,7 @@ class CLI( Cmd ):
                 if isReadable( self.inPoller ):
                     key = self.stdin.read( 1 )
                     node.write( key )
-                if isReadable( nodePoller ):
+                if isReadable( nodePoller ):#this is probably where its messing up, should be able to be interactive.
                     data = node.monitor()
                     output( data )
                 if not node.waiting:
