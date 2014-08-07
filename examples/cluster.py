@@ -578,13 +578,10 @@ class MininetCluster( Mininet ):
                    'link': RemoteLink,
                    'precheck': True }
         params.update( kwargs )
-        usernames = params.pop( 'usernames', [] )
+        self.nfs = params.pop( 'nfs', False )
         servers = params.pop( 'servers', [] )
         servers = [ s if s != 'localhost' else None for s in servers ]
         self.servers = servers
-        self.usernames = {}
-        for hostname, username in zip( servers, usernames ):
-            self.usernames[ hostname ] = username
         self.serverIP = params.pop( 'serverIP', {} )
         if not self.serverIP:
             self.serverIP = { server: RemoteMixin.findServerIP( server )
@@ -670,7 +667,7 @@ class MininetCluster( Mininet ):
     # Implement this outside of mininet. This is a placeholder and convenience method/hack for now.
     def authenticate( self, server=None, remoteIP=None ):
         cmd = [ 'ssh-copy-id', '-i', '/root/.ssh/id_rsa.pub' ]
-        dest = '%s@%s' % ( self.usernames[ server ], server )
+        dest = '%s@%s' % ( self.user, server )
         cmd1 = ' '.join( c for c in cmd ) + ' ' +dest
         quietRun( cmd1 )
 
@@ -721,7 +718,8 @@ class MininetCluster( Mininet ):
         self.waitForConnections( conns )
 
     def stopConnections( self ):
-        self.umountDirs()
+        if self.nfs:
+            self.umountDirs()
         for dest, cfile, conn in self.connections.values():
             cmd = [ 'ssh', '-O', 'stop', '-S', cfile, dest ]
             errRun( cmd )
@@ -760,7 +758,6 @@ class MininetCluster( Mininet ):
         for server in self.servers:
             if not server:
                 continue
-            
             key = ( None, server )
             dest1, cfile1, _conn = self.connections[ key ]
             ssh = [ 'ssh',  '-S', cfile1, dest1, 'cd', '/', ';' ]
@@ -806,9 +803,10 @@ class MininetCluster( Mininet ):
         info( '*** Starting server connections\n' )
         self.startConnections()
         info( '\n' )
-        info( '*** Mounting remote directories\n' )
-        self.mountDirs()
-        info( '\n' )
+        if self.nfs:
+            info( '*** Mounting remote directories\n' )
+            self.mountDirs()
+            info( '\n' )
         info( '*** Placing nodes\n' )
         self.placeNodes()
         info( '\n' )
@@ -825,9 +823,10 @@ class MininetCluster( Mininet ):
 
     def start( self ):
         Mininet.start( self )
-        info( '*** Waiting for remote mounts\n' )
-        for conn in self.mounts:
-            conn.wait()
+        if self.nfs:
+            info( '*** Waiting for remote mounts\n' )
+            for conn in self.mounts:
+                conn.wait()
 
 def testNsTunnels():
     "Test tunnels between nodes in namespaces"

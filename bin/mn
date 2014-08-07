@@ -211,6 +211,9 @@ class MininetRunner( object ):
         opts.add_option( '--cluster', type='string', default=None,
                          metavar='server1,server2...',
                          help=( 'run on multiple servers (experimental!)' ) )
+        opts.add_option( '--nfs', action='store_true', default=False,
+                         help=( 'mount remote nfs directories for --cluster '
+                                '(experimental!) ' ) )
         opts.add_option( '--placement', type='choice',
                          choices=PLACEMENT.keys(), default='block',
                          metavar='block|random',
@@ -275,7 +278,8 @@ class MininetRunner( object ):
             host, switch, link = RemoteHost, RemoteOVSSwitch, RemoteLink
             CLI = ClusterCLI
             Net = partial( MininetCluster, servers=cluster.split( ',' ),
-                           placement=PLACEMENT[ self.options.placement ] )
+                           placement=PLACEMENT[ self.options.placement ],
+                           nfs=self.options.nfs )
 
         mn = Net( topo=topo,
                   switch=switch, host=host, controller=controller,
