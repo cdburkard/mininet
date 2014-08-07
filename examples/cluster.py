@@ -151,7 +151,7 @@ class RemoteMixin( object ):
                 if ipmatch:
                     return ipmatch[ 0 ]
             # Otherwise, look up remote server
-            output = quietRun( 'host %s' % server )
+            output = quietRun( 'getent ahostsv4 %s' % server )
         ips = cls._ipMatchRegex.findall( output )
         ip = ips[ 0 ] if ips else None
         return ip
@@ -199,7 +199,6 @@ class RemoteMixin( object ):
         if sudo:
             cmd = [ 'sudo', '-E' ] + cmd
         cmd = ssh + [ self.dest ] + cmd
-        # print 'rpopen', cmd
         popen = Popen( cmd, **opts )
         return popen
 
@@ -335,7 +334,6 @@ class RemoteLink( Link ):
             cmd = 'ip tuntap add dev tap9 mode tap user ' + node.user
             node.rcmd( cmd )
             links = node.rcmd( 'ip link show' )
-            # print 'after add, links =', links
             assert 'tap9' in links
         # 2. Create ssh tunnel between tap interfaces
         # -n: close stdin
@@ -570,9 +568,13 @@ class MininetCluster( Mininet ):
                    'controller': RController,
                    'link': RemoteLink }
         params.update( kwargs )
+        usernames = params.pop( 'usernames', [] )
         servers = params.pop( 'servers', [] )
         servers = [ s if s != 'localhost' else None for s in servers ]
         self.servers = servers
+        self.usernames = {}
+        for hostname, username in zip( servers, usernames ):
+            self.usernames[ hostname ] = username
         self.serverIP = {}
         self.user = params.pop( 'user', None )
         if self.servers and not self.user:
@@ -590,7 +592,6 @@ class MininetCluster( Mininet ):
         conn = Popen( cmd, stdout=PIPE, close_fds=True )
         signal( SIGINT, old )
         return conn
-
 
     def baddLink( self, *args, **kwargs ):
         "break addlink for testing"
@@ -613,6 +614,7 @@ class MininetCluster( Mininet ):
         else:
             ip2 = RemoteMixin.findServerIP( server2 )
             self.serverIP[ server2 ] = ip2
+        self.authenticate( server=server2, remoteIP=ip2 )
         dest2 = '%s@%s' % ( self.user, ip2 )
         cfile2 = '%s/%s-%s' % ( self.cdir, server1, server2 )
         cmd = [ 'ssh', '-n', '-o', 'ControlPersist=yes',
@@ -627,7 +629,14 @@ class MininetCluster( Mininet ):
         # Create and return connection
         conn2 = self.popen( cmd )
         return dest2, cfile2, conn2
-    
+   
+    # Implement this outside of mininet. This is a placeholder and convenience method/hack for now.
+    def authenticate( self, server=None, remoteIP=None ):
+        cmd = [ 'ssh-copy-id', '-i', '/root/.ssh/id_rsa.pub' ]
+        dest = '%s@%s' % ( self.usernames[ server ], server )
+        cmd1 = ' '.join( c for c in cmd ) + ' ' +dest
+        quietRun( cmd1 )
+
     def waitConnected( _self, conns ):
         "Wait for a specific ssh connection to start up"
         for _dest, _cfile, conn in conns:
@@ -675,6 +684,7 @@ class MininetCluster( Mininet ):
         self.waitConnected( conns )
 
     def stopConnections( self ):
+        self.umountDirs()
         for dest, cfile, conn in self.connections.values():
             cmd = [ 'ssh', '-O', 'stop', '-S', cfile, dest ]
             errRun( cmd )
@@ -706,10 +716,51 @@ class MininetCluster( Mininet ):
             if cfile:
                 config.setdefault( 'controlPath', cfile )
 
+    def umountDirs( self ):
+        "mount server's directories on remote nodes for ssh access"
+        cmd1 = [ 'sudo', 'umount', '/root/.ssh' ]
+        cmd2 = [ 'sudo', 'umount', '/home/mininet' ]
+        for server in self.servers:
+            if not server:
+                continue
+            
+            key = ( None, server )
+            dest1, cfile1, _conn = self.connections[ key ]
+            ssh = [ 'ssh',  '-S', cfile1, dest1, 'cd', '/', ';' ]
+            cmd = cmd1
+            cmd = ssh + cmd
+            self.popen( cmd )
+            cmd = cmd2
+            cmd = ssh + cmd
+            self.popen( cmd )
+ 
+    def mountDirs( self ):
+        "mount server's directories on remote nodes for ssh access"
+        self.mounts = []
+        cmd1 = [ 'sudo', 'mount', '-t', 'nfs', '192.168.56.101:/root/.ssh', '/root/.ssh' ]
+        cmd2 = [ 'sudo', 'mount', '-t', 'nfs', '192.168.56.101:/home/mininet', '/home/mininet' ]
+        for server in self.servers:
+            if not server:
+                continue
+            key = ( None, server )
+            dest1, cfile1, _conn = self.connections[ key ]
+            ssh = [ 'ssh',  '-S', cfile1, dest1 ]
+            cmd = cmd1
+            cmd = ssh + cmd
+            conn = self.popen( cmd )
+            self.mounts.append( conn )
+            cmd = cmd2
+            cmd = ssh + cmd
+            conn = self.popen( cmd )
+            self.mounts.append( conn )
+    
     def buildFromTopo( self, *args, **kwargs ):
         "Start network"
         info( '*** Starting server connections\n' )
         self.startConnections()
+        info( '\n' )
+        info( '*** Mounting remote directories\n' )
+        self.mountDirs()
         info( '\n' )
         info( '*** Placing nodes\n' )
         self.placeNodes()
@@ -725,6 +776,11 @@ class MininetCluster( Mininet ):
         info( '*** Stopping server connections\n' )
         self.stopConnections()
 
+    def start( self ):
+        Mininet.start( self )
+        info( '*** Waiting for remote mounts\n' )
+        for conn in self.mounts:
+            conn.wait()
 
 def testNsTunnels():
     "Test tunnels between nodes in namespaces"
