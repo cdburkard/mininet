@@ -586,6 +586,8 @@ class MininetCluster( Mininet ):
         if not self.serverIP:
             self.serverIP = { server: RemoteMixin.findServerIP( server )
                               for server in self.servers }
+        if self.nfs:
+            self.nfsServer = self.servers[ 0 ]
         self.user = params.pop( 'user', None )
         if self.servers and not self.user:
             self.user = quietRun( 'who am i' ).split()[ 0 ]
@@ -594,7 +596,7 @@ class MininetCluster( Mininet ):
         self.connections = {}
         self.placement = params.pop( 'placement', SwitchBinPlacer )
         # Make sure control directory exists
-        self.cdir = os.environ[ 'HOME' ] + '/.ssh/mn'
+        self.cdir = '/tmp/mn'#os.environ[ 'HOME' ] + '/.ssh/mn'
         errRun( [ 'mkdir', '-p', self.cdir ] )
         Mininet.__init__( self, *args, **params )
 
@@ -656,10 +658,12 @@ class MininetCluster( Mininet ):
                dest2, 'echo OK' ]
         if server1:
             # Create remote connection
-            # We MUST have an existing connection to server1
+            # We MUST have an existing connection to server1a
+            # need to verift /tmp/mn is present on remote servers
             dest1, cfile1, _conn = self.connections[ ( None, server1 ) ]
             ssh = [ 'ssh', '-n', '-S', cfile1, dest1 ]
             cmd = ssh + cmd
+            print cmd
         # Create and return connection
         conn2 = self.popen( cmd )
         return dest2, cfile2, conn2
@@ -771,14 +775,26 @@ class MininetCluster( Mininet ):
     def mountDirs( self ):
         "mount server's directories on remote nodes for ssh access"
         self.mounts = []
-        cmd1 = [ 'sudo', 'mount', '-t', 'nfs', '192.168.56.101:/root/.ssh', '/root/.ssh' ]
-        cmd2 = [ 'sudo', 'mount', '-t', 'nfs', '192.168.56.101:/home/mininet', '/home/mininet' ]
+        cmd1 = [ 'sudo', 'mount', '-t', 'nfs', '%s:/root/.ssh' % self.serverIP[ self.nfsServer ], '/root/.ssh' ]
+        cmd2 = [ 'sudo', 'mount', '-t', 'nfs', '%s:/home/mininet' % self.serverIP[ self.nfsServer ], '/home/mininet' ]
+        # if we mount home/mininnet first, we can then copy over /root/.ssh/known_hosts from master mininet instance before we mount /root/.ssh
         for server in self.servers:
-            if not server:
+            # if server is nfsServer, we dont want to mount
+            # the directories( obviously )
+            if server is self.nfsServer:
                 continue
-            key = ( None, server )
-            dest1, cfile1, _conn = self.connections[ key ]
-            ssh = [ 'ssh',  '-S', cfile1, dest1 ]
+            # if server is localhost and we arent the nfsServer,
+            # we should mount directories without ssh access
+            # do this after the other mounts happen
+            if server is None and server is not self.nfsServer:
+                #self.popen( cmd1 )
+                #self.popen( cmd2 )
+                continue
+            dest = '%s@%s' % ( self.user, RemoteMixin.findServerIP( server ) )
+            #key = ( None, server )
+            #dest1, cfile1, _conn = self.connections[ key ]
+            ssh = [ 'sudo', 'ssh', dest ]
+            #ssh = [ 'ssh',  '-S', cfile1, dest1 ]
             cmd = cmd1
             cmd = ssh + cmd
             conn = self.popen( cmd )
@@ -787,7 +803,11 @@ class MininetCluster( Mininet ):
             cmd = ssh + cmd
             conn = self.popen( cmd )
             self.mounts.append( conn )
-    
+        conn = self.popen( cmd2 )
+        self.mounts.append( conn )
+        conn = self.popen( cmd1 )
+        self.mounts.append( conn )
+
     def addController( self, *args, **kwargs ):
         "Patch to update IP address to global IP address"
         controller = Mininet.addController( self, *args, **kwargs )
@@ -798,15 +818,34 @@ class MininetCluster( Mininet ):
              Intf( 'eth0', node=controller ).updateIP()
         return controller
 
+    def configureSSH( self ):
+        "configure known hosts in ssh"
+        #for server in self.servers:
+        #    pass#placeholder. this is where i need to deal with known_hosts file
+        #dest = '%s@%s' % ( self.user, self.serverIP[ self.nfsServer ] )
+        #cmd = [ 'ssh', '-n', dest, 'sudo', 'cat', '/root/.ssh/id_rsa.pub', '>>', '~/.ssh/authorized_keys;',
+        #        'cat', '~/.ssh/id_rsa.pub', '>>', '~/.ssh/authorized_keys' ]
+        #self.popen( cmd )
+        quietRun( "sudo cat /home/mininet/.ssh/id_rsa.pub >> /home/mininet/.ssh/authorized_keys" )
+        quietRun( "sudo cat /root/.ssh/id_rsa.pub >> /home/mininet/.ssh/authorized_keys" )
+
     def buildFromTopo( self, *args, **kwargs ):
         "Start network"
-        info( '*** Starting server connections\n' )
-        self.startConnections()
-        info( '\n' )
         if self.nfs:
             info( '*** Mounting remote directories\n' )
             self.mountDirs()
             info( '\n' )
+            info( '*** Waiting for remote mounts\n' )
+            for conn in self.mounts:
+                conn.wait()
+            self.configureSSH()
+        info( '*** Starting server connections\n' )
+        self.startConnections()
+        info( '\n' )
+        # if self.nfs:
+        #     info( '*** Mounting remote directories\n' )
+        #     self.mountDirs()
+        #     info( '\n' )
         info( '*** Placing nodes\n' )
         self.placeNodes()
         info( '\n' )
@@ -814,19 +853,12 @@ class MininetCluster( Mininet ):
         self.startLinkConnections()
         info( '\n' )
         Mininet.buildFromTopo( self, *args, **kwargs )
-
+    
     def stop( self ):
         "Stop network"
         Mininet.stop( self )
         info( '*** Stopping server connections\n' )
         self.stopConnections()
-
-    def start( self ):
-        Mininet.start( self )
-        if self.nfs:
-            info( '*** Waiting for remote mounts\n' )
-            for conn in self.mounts:
-                conn.wait()
 
 def testNsTunnels():
     "Test tunnels between nodes in namespaces"
