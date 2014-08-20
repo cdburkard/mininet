@@ -54,6 +54,16 @@ if [ "$DIST" = "Fedora" ]; then
         $install redhat-lsb-core
     fi
 fi
+test -e /etc/arch-release && DIST="Arch"
+if [ "$DIST" = "Arch" ]; then
+    install='sudo pacman -S --needed --noconfirm'
+    remove='sudo pacman -R'
+    pkginst='sudo pacman -U --needed --noconfirm'
+    # Prereqs for this script
+    if ! which lsb_release &> /dev/null; then
+        $install lsb-release 
+    fi
+fi
 if which lsb_release &> /dev/null; then
     DIST=`lsb_release -is`
     RELEASE=`lsb_release -rs`
@@ -66,8 +76,8 @@ echo "Detected Linux distribution: $DIST $RELEASE $CODENAME $ARCH"
 KERNEL_NAME=`uname -r`
 KERNEL_HEADERS=kernel-headers-${KERNEL_NAME}
 
-if ! echo $DIST | egrep 'Ubuntu|Debian|Fedora'; then
-    echo "Install.sh currently only supports Ubuntu, Debian and Fedora."
+if ! echo $DIST | egrep 'Ubuntu|Debian|Fedora|Arch'; then
+    echo "Install.sh currently only supports Ubuntu, Debian, Fedora, and Arch."
     exit 1
 fi
 
@@ -117,6 +127,40 @@ function mn_deps {
         $install gcc make socat psmisc xterm openssh-clients iperf \
             iproute telnet python-setuptools libcgroup-tools \
             ethtool help2man pyflakes pylint python-pep8
+    elif [ "$DIST" = "Arch" ]; then
+        $install gcc make socat psmisc xterm openssh iperf \
+        iproute inetutils python-setuptools \
+        ethtool help2man python2-pylint python2-pep8 wget bison flex
+        mkdir -p ~/AUR/libcgroup
+        pushd ~/AUR/libcgroup
+        if [ -d libcgroup-git ]; then
+            cd libcgroup-git
+            count=$(ls -l *.tar.xz 2>/dev/null | wc -l)
+            if [ "$count" == 0 ]; then
+                cd ..
+                makepkg -c
+                cd libcgroup-git
+            fi
+        else
+            wget https://aur.archlinux.org/packages/li/libcgroup-git/libcgroup-git.tar.gz
+            tar -xvf *.tar.gz
+            cd libcgroup-git
+            makepkg -fc
+        fi
+        $pkginst *.tar.xz
+        popd
+        pushd $MININET_DIR/mininet
+        py2check="grep -c .*python2 Makefile"
+        if [ $($py2check) == 0 ]; then
+            sudo /bin/bash -c "grep -rIil '#!.*python' . | grep -v 'install.sh' | xargs -n1 sed -i 's:#!/usr/bin/env python:#!/usr/bin/env python2:g'"
+            sudo /bin/bash -c "grep -rIil '#!.*python' . | grep -v 'install.sh' | xargs -n1 sed -i 's:#!/usr/bin/python:#!/usr/bin/python2:g'"
+            sudo sed 's:BINDIR = /usr/bin:BINDIR = $(DESTDIR)/usr/bin:g' -i Makefile
+            sudo sed 's:MANDIR = /usr/share/man/man1:MANDIR = $(DESTDIR)/usr/share/man/man1:g' -i Makefile
+            sudo sed 's:install $(MNEXEC) $(BINDIR):mkdir -p $(BINDIR); install $(MNEXEC) $(BINDIR):g' -i Makefile
+            sudo sed 's:install $(MANPAGES) $(MANDIR):mkdir -p $(MANDIR);install $(MANPAGES) $(MANDIR):g' -i Makefile
+            sudo sed 's:python setup.py:python2 setup.py install --prefix=/usr --root="$(DESTDIR)" --optimize=1:g' -i Makefile
+        fi
+        popd
     else
         $install gcc make socat psmisc xterm ssh iperf iproute telnet \
             python-setuptools cgroup-bin ethtool help2man \
@@ -132,7 +176,29 @@ function mn_deps {
 # Install Mininet developer dependencies
 function mn_dev {
     echo "Installing Mininet developer dependencies"
-    $install doxygen doxypy texlive-fonts-recommended
+    if [ "$DIST" = "Arch" ]; then
+        $install texlive-fontsextra doxygen
+        mkdir -p ~/AUR/doxypy
+        pushd ~/AUR/doxypy
+        if [ -d doxypy-git ]; then
+            cd doxypy-git
+            count=$(ls -l *.tar.xz 2>/dev/null | wc -l)
+            if [ "$count" == 0 ]; then
+                cd ..
+                makepkg -c
+                cd doxypy-git
+            fi
+        else
+            wget https://aur.archlinux.org/packages/do/doxypy-git/doxypy-git.tar.gz
+            tar -xvf *.tar.gz
+            cd doxypy-git
+            makepkg -fc
+        fi
+        $pkginst *.tar.xz
+        popd
+    else
+        $install doxygen doxypy texlive-fonts-recommended
+    fi
 }
 
 # The following will cause a full OF install, covering:
@@ -145,6 +211,8 @@ function of {
     $install autoconf automake libtool make gcc
     if [ "$DIST" = "Fedora" ]; then
         $install git pkgconfig glibc-devel
+    elif [ "$DIST" = "Arch" ]; then
+        $install git pkgconfig glibc
     else
         $install git-core autotools-dev pkg-config libc6-dev
     fi
@@ -225,7 +293,11 @@ function wireshark {
         return
     fi
 
-    $install wireshark tshark libgtk2.0-dev
+    if [ "$DIST" = "Arch" ]; then
+        $install wireshark-gtk wireshark-cli
+    else
+        $install wireshark tshark libgtk2.0-dev
+    fi
 
     if [ "$DIST" = "Ubuntu" ] && [ "$RELEASE" != "10.04" ]; then
         # Install newer version
@@ -327,6 +399,9 @@ function ovs {
 
     if [ "$DIST" == "Fedora" ]; then
         $install openvswitch openvswitch-controller
+        return
+    elif [ "$DIST" == "Arch" ]; then
+        $install openvswitch
         return
     fi
 
