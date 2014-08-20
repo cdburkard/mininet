@@ -154,11 +154,11 @@ function mn_deps {
         if [ $($py2check) == 0 ]; then
             sudo /bin/bash -c "grep -rIil '#!.*python' . | grep -v 'install.sh' | xargs -n1 sed -i 's:#!/usr/bin/env python:#!/usr/bin/env python2:g'"
             sudo /bin/bash -c "grep -rIil '#!.*python' . | grep -v 'install.sh' | xargs -n1 sed -i 's:#!/usr/bin/python:#!/usr/bin/python2:g'"
-            sudo sed 's:BINDIR = /usr/bin:BINDIR = $(DESTDIR)/usr/bin:g' -i Makefile
-            sudo sed 's:MANDIR = /usr/share/man/man1:MANDIR = $(DESTDIR)/usr/share/man/man1:g' -i Makefile
-            sudo sed 's:install $(MNEXEC) $(BINDIR):mkdir -p $(BINDIR); install $(MNEXEC) $(BINDIR):g' -i Makefile
-            sudo sed 's:install $(MANPAGES) $(MANDIR):mkdir -p $(MANDIR);install $(MANPAGES) $(MANDIR):g' -i Makefile
-            sudo sed 's:python setup.py:python2 setup.py install --prefix=/usr --root="$(DESTDIR)" --optimize=1:g' -i Makefile
+            #sudo sed 's:BINDIR = /usr/bin:BINDIR = $(DESTDIR)/usr/bin:g' -i Makefile
+            #sudo sed 's:MANDIR = /usr/share/man/man1:MANDIR = $(DESTDIR)/usr/share/man/man1:g' -i Makefile
+            #sudo sed 's:install $(MNEXEC) $(BINDIR):mkdir -p $(BINDIR); install $(MNEXEC) $(BINDIR):g' -i Makefile
+            #sudo sed 's:install $(MANPAGES) $(MANDIR):mkdir -p $(MANDIR);install $(MANPAGES) $(MANDIR):g' -i Makefile
+            sudo sed 's:python setup.py:python2 setup.py:g' -i Makefile
         fi
         popd
     else
