@@ -331,6 +331,48 @@ class CLI( Cmd ):
         elapsed = time.time() - start
         self.stdout.write("*** Elapsed time: %0.6f secs\n" % elapsed)
 
+    def do_addhost( self, line ):
+        """add a host to mininet during runtime
+            what should be the default behavior if we dont
+            specify a switch? If parameters are optional, 
+            how do we know what parameter they are specifying?
+            what if they just say addhost h1 10.1/8?
+            how do we decide that it is an IP address
+            and not a mac address? do we parse for certain 
+            characters and assume anything with a / is and ip,
+            x is a MAC and nothing is a switch? or require all of the
+            arguments all of the time like OVX?
+            
+            if switch is only thing specified, make sure the subnet matches other hosts.
+            same as if only ip is only thing specified."""
+        args = line.split()
+        if len(args) < 1:
+            error( 'usage: addhost hostname [arg1] [arg2] ...\n' )
+            return
+        hostname = args[0]
+        args = args[ 1: ]
+        p = {}
+        switchname = None
+        for arg in args:
+            if ':' in arg:
+                p['mac'] =  arg
+            elif '/' in arg:
+                p['ip'] = arg
+            else:
+                switchname = arg
+        
+        for key, value in p.items():
+            if value is None:
+                p.remove( key )
+        if switchname:
+            switch = self.mn.nameToNode[ switchname ]
+        else:
+            switch = self.mn.switches[0]# algorithm of some sort here to decide on default switch?
+        host = self.mn.addHost( hostname, **p )
+        link = self.mn.addLink( host, switch )
+        host.configDefault()
+        switch.attach( link.intf2 )
+
     def default( self, line ):
         """Called on an input line when the command prefix is not recognized.
         Overridden to run shell commands when a node is the first CLI argument.
