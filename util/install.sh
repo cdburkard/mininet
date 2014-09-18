@@ -200,20 +200,6 @@ function of13 {
     cd $BUILD_DIR
 }
 
-function wireshark_version_check {
-    # Check Wireshark version
-    WS=$(which wireshark)
-    WS_VER_PATCH=(1 10) # targetting wireshark 1.10.0
-    WS_VER=($($WS --version | sed 's/[a-z ]*\([0-9]*\).\([0-9]*\).\([0-9]*\).*/\1 \2 \3/'))
-    if [ "${WS_VER[0]}" -lt "${WS_VER_PATCH[0]}" ] ||
-       [[ "${WS_VER[0]}" -le "${WS_VER_PATCH[0]}" && "${WS_VER[1]}" -lt "${WS_VER_PATCH[1]}" ]]
-    then
-        # pre-1.10.0 wireshark
-        echo "Setting revision: pre-ws-1.10.0"
-        WS_DISSECTOR_REV="pre-ws-1.10.0" 
-    fi
-}
-
 function wireshark {
     echo "Installing Wireshark dissector..."
 
@@ -227,33 +213,15 @@ function wireshark {
 
     $install wireshark tshark libgtk2.0-dev
 
-    if [ "$DIST" = "Ubuntu" ] && [ "$RELEASE" != "10.04" ]; then
-        # Install newer version
-        $install scons mercurial libglib2.0-dev
-        $install libwiretap-dev libwireshark-dev
+    if [ "$DIST" = "Ubuntu" ] || [ "$DIST" = "Debian" ]; then
         cd $BUILD_DIR
-        hg clone https://bitbucket.org/barnstorm/of-dissector
-        if [[ -z "$WS_DISSECTOR_REV" ]]; then
-            wireshark_version_check
-        fi
-        cd of-dissector
-        if [[ -n "$WS_DISSECTOR_REV" ]]; then
-            hg checkout ${WS_DISSECTOR_REV}
-        fi
-        # Build dissector
-        cd src
-        export WIRESHARK=/usr/include/wireshark
-        scons
-        # libwireshark0/ on 11.04; libwireshark1/ on later
+        git clone https://github.com/floodlight/loxigen.git
+        cd loxigen
+        make wireshark
         WSDIR=`find /usr/lib -type d -name 'libwireshark*' | head -1`
         WSPLUGDIR=$WSDIR/plugins/
-        sudo cp openflow.so $WSPLUGDIR
+        sudo cp loxi_output/wireshark/openflow.lua $WSPLUGDIR
         echo "Copied openflow plugin to $WSPLUGDIR"
-    else
-        # Install older version from reference source
-        cd $BUILD_DIR/openflow/utilities/wireshark_dissectors/openflow
-        make
-        sudo make install
     fi
 
     # Copy coloring rules: OF is white-on-blue:
