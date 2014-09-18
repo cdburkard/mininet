@@ -1,5 +1,31 @@
 #!/usr/bin/python
 
+'''
+An example showing how to add and delete hosts, switches, and links
+from the CLI.
+
+Is there a better way to choose a custom class?
+could explicitly define classes that can be chosen, as we do
+when you start the mininet CLI.
+
+How do we allow an arbitrary parameter to be input when creating a
+new object?
+use literal_eval to evaluate a python expression. unfortunately we
+must include quotes for string objects if we do this... is there a
+better way?
+
+how do we start user switch at runtime?
+
+PingFull does not work if there are no interfaces. should fix this
+Done
+
+
+
+'''
+
+
+
+
 from mininet.topo import SingleSwitchTopo
 from mininet.cli import CLI
 from mininet.net import Mininet
@@ -79,10 +105,18 @@ class mobilityCLI( CLI ):
                 switchname = val
                 continue
             if arg == 'cls':
-                cls = getattr( importlib.import_module( 'mininet.node' ), val )
+                try:
+                    cls = getattr( importlib.import_module( 'mininet.node' ), val )
+                except AttributeError:
+                    try:
+                        cls = getattr( importlib.import_module( 'mininet.nodelib' ), val )
+                    except AttributeError:
+                        error( '*** no class named %s\n' % val )
+                        return
                 params[ arg ] = cls
                 continue
             params[ arg ] = literal_eval( val )
+            print params
         if switchname:
             switch = self.mn.nameToNode[ switchname ]
         host = self.mn.addHost( hostname, **params )
@@ -108,7 +142,11 @@ class mobilityCLI( CLI ):
         for arg in args:
             arg, val = arg.split( '=' )
             if arg == 'cls':
-                cls = getattr( importlib.import_module( 'mininet.node' ), val )
+                try:
+                    cls = getattr( importlib.import_module( 'mininet.node' ), val )
+                except AttributeError:
+                    error( '*** no switch class named %s\n' % val )
+                    return
                 params[ arg ] = cls
                 #params[ arg ] = eval( val )
                 continue
@@ -129,7 +167,11 @@ class mobilityCLI( CLI ):
         for arg in args:
             arg, val = arg.split( '=' )
             if arg == 'cls':
-                cls = getattr( importlib.import_module( 'mininet.link' ), val )
+                try:
+                    cls = getattr( importlib.import_module( 'mininet.link' ), val )
+                except AttributeError:
+                    error( '*** no link class named %s\n' % val )
+                    return
                 params[ arg ] = cls
                 #params[ arg ] = eval( val )
                 continue
@@ -137,7 +179,7 @@ class mobilityCLI( CLI ):
         link = self.mn.addLink( node1, node2, **params )
         for node in node1, node2:
             if node in self.mn.hosts:
-                node.configDefault()
+                node.configDefault( **node.params ) # ipbase wont work for this
             elif isinstance( node, OVSSwitch ): # or IVS Switch
                 if node is node1:
                     node.attach( link.intf1 )
