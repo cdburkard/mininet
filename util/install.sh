@@ -225,8 +225,8 @@ function wireshark {
     fi
 
     # Copy coloring rules: OF is white-on-blue:
-    mkdir -p $HOME/.wireshark
-    cp $MININET_DIR/mininet/util/colorfilters $HOME/.wireshark
+    mkdir -p $BUILD_DIR/.wireshark
+    cp $MININET_DIR/mininet/util/colorfilters $BUILD_DIR/.wireshark
 }
 
 
