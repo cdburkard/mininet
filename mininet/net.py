@@ -90,13 +90,16 @@ import os
 import re
 import select
 import signal
+import random
 import copy
 from time import sleep
 from itertools import chain, groupby
+from math import ceil
 
 from mininet.cli import CLI
 from mininet.log import info, error, debug, output, warn
 from mininet.node import Host, OVSKernelSwitch, DefaultController, Controller
+from mininet.nodelib import NAT
 from mininet.link import Link, Intf
 from mininet.util import quietRun, fixLimits, numCores, ensureRoot
 from mininet.util import macColonHex, ipStr, ipParse, netParse, ipAdd
@@ -154,6 +157,7 @@ class Mininet( object ):
         self.hosts = []
         self.switches = []
         self.controllers = []
+        self.links = []
 
         self.nameToNode = {}  # name to Node (Host/Switch) objects
 
@@ -208,7 +212,7 @@ class Mininet( object ):
                                   prefixLen=self.prefixLen ) +
                                   '/%s' % self.prefixLen }
         if self.autoSetMacs:
-            defaults[ 'mac'] = macColonHex( self.nextIP )
+            defaults[ 'mac' ] = macColonHex( self.nextIP )
         if self.autoPinCpus:
             defaults[ 'cores' ] = self.nextCore
             self.nextCore = ( self.nextCore + 1 ) % self.numCores
@@ -259,6 +263,20 @@ class Mininet( object ):
             self.controllers.append( controller_new )
             self.nameToNode[ name ] = controller_new
         return controller_new
+
+    def addNAT( self, name='nat0', connect=True, inNamespace=False, **params ):
+        nat = self.addHost( name, cls=NAT, inNamespace=inNamespace, 
+                            subnet=self.ipBase, **params )
+        # find first switch and create link
+        if connect:
+            # connect the nat to the first switch
+            self.addLink( nat, self.switches[ 0 ] )
+            # set the default route on hosts
+            natIP = nat.params[ 'ip' ].split('/')[ 0 ]
+            for host in self.hosts:
+                if host.inNamespace:
+                    host.setDefaultRoute( 'via %s' % natIP )
+        return nat
 
     # BL: We now have four ways to look up nodes
     # This may (should?) be cleaned up in the future.
@@ -311,13 +329,19 @@ class Mininet( object ):
             port1: source port
             port2: dest port
             returns: link object"""
+        mac1 = macColonHex( random.randint(1, 2**48 - 1) & 0xfeffffffffff  | 0x020000000000 )
+        mac2 = macColonHex( random.randint(1, 2**48 - 1) & 0xfeffffffffff  | 0x020000000000 )
         defaults = { 'port1': port1,
                      'port2': port2,
+                     'addr1': mac1,
+                     'addr2': mac2,
                      'intf': self.intf }
         defaults.update( params )
         if not cls:
             cls = self.link
-        return cls( node1, node2, **defaults )
+        link = cls( node1, node2, **defaults )
+        self.links.append( link )
+        return link
 
     def configHosts( self ):
         "Configure a set of hosts."
@@ -335,7 +359,6 @@ class Mininet( object ):
             # quietRun( 'renice +18 -p ' + repr( host.pid ) )
             # This may not be the right place to do this, but
             # it needs to be done somewhere.
-            host.cmd( 'ifconfig lo up' )
         info( '\n' )
 
     def buildFromTopo( self, topo=None ):
@@ -459,6 +482,11 @@ class Mininet( object ):
         for switch in self.switches:
             info( switch.name + ' ' )
             switch.stop()
+            switch.terminate()
+        info( '\n' )
+        info( '*** Stopping %i links\n' % len( self.links ) )
+        for link in self.links:
+            link.stop()
         info( '\n' )
         info( '*** Stopping %i hosts\n' % len( self.hosts ) )
         for host in self.hosts:
@@ -576,6 +604,8 @@ class Mininet( object ):
         r += r'(\d+\.\d+)/(\d+\.\d+)/(\d+\.\d+)/(\d+\.\d+) ms'
         m = re.search( r, pingOutput )
         if m is None:
+            if received == 0:
+                return errorTuple
             error( '*** Error: could not parse ping output: %s\n' %
                    pingOutput )
             return errorTuple
@@ -708,33 +738,41 @@ class Mininet( object ):
         duration: test duration in seconds
         returns a single list of measured CPU fractions as floats.
         """
+        cores = int( quietRun( 'nproc' ) )
         pct = cpu * 100
-        info('*** Testing CPU %.0f%% bandwidth limit\n' % pct)
+        info( '*** Testing CPU %.0f%% bandwidth limit\n' % pct )
         hosts = self.hosts
+        cores = int( quietRun( 'nproc' ) )
+        # number of processes to run a while loop on per host
+        num_procs = int( ceil( cores * cpu ) )
+        pids = {}
         for h in hosts:
-            h.cmd( 'while true; do a=1; done &' )
-        pids = [h.cmd( 'echo $!' ).strip() for h in hosts]
-        pids_str = ",".join(["%s" % pid for pid in pids])
-        cmd = 'ps -p %s -o pid,%%cpu,args' % pids_str
-        # It's a shame that this is what pylint prefers
-        outputs = []
-        for _ in range( duration ):
+            pids[ h ] = []
+            for _core in range( num_procs ):
+                h.cmd( 'while true; do a=1; done &' )
+                pids[ h ].append( h.cmd( 'echo $!' ).strip() )
+        outputs = {}
+        time = {}
+        # get the initial cpu time for each host
+        for host in hosts:
+            outputs[ host ] = []
+            with open( '/sys/fs/cgroup/cpuacct/%s/cpuacct.usage' % host, 'r' ) as f:
+                time[ host ] = float( f.read() )
+        for _ in range( 5 ):
             sleep( 1 )
-            outputs.append( quietRun( cmd ).strip() )
-        for h in hosts:
-            h.cmd( 'kill %1' )
+            for host in hosts:
+                with open( '/sys/fs/cgroup/cpuacct/%s/cpuacct.usage' % host, 'r' ) as f:
+                    readTime = float( f.read() )
+                outputs[ host ].append( ( ( readTime - time[ host ] )
+                                        / 1000000000 ) / cores * 100 )
+                time[ host ] = readTime
+        for h, pids in pids.items():
+            for pid in pids:
+                h.cmd( 'kill -9 %s' % pid )
         cpu_fractions = []
-        for test_output in outputs:
-            # Split by line.  Ignore first line, which looks like this:
-            # PID %CPU COMMAND\n
-            for line in test_output.split('\n')[1:]:
-                r = r'\d+\s*(\d+\.\d+)'
-                m = re.search( r, line )
-                if m is None:
-                    error( '*** Error: could not extract CPU fraction: %s\n' %
-                           line )
-                    return None
-                cpu_fractions.append( float( m.group( 1 ) ) )
+        for _host, outputs in outputs.items():
+            for pct in outputs:
+                cpu_fractions.append( pct )
         output( '*** Results: %s\n' % cpu_fractions )
         return cpu_fractions
 

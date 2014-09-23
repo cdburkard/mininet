@@ -80,8 +80,8 @@ class Node( object ):
         # Make sure class actually works
         self.checkSetup()
 
-        self.name = name
-        self.inNamespace = inNamespace
+        self.name = params.get( 'name', name )
+        self.inNamespace = params.get( 'inNamespace', inNamespace )
 
         # Stash configuration parameters for future reference
         self.params = params
@@ -116,29 +116,28 @@ class Node( object ):
         return node or cls.inToNode.get( fd )
 
     # Command support via shell process in namespace
-
-    def startShell( self ):
+    def startShell( self, mnopts=None ):
         "Start a shell process for running commands"
         if self.shell:
-            error( "%s: shell is already running" )
+            error( "%s: shell is already running\n" % self.name )
             return
         # mnexec: (c)lose descriptors, (d)etach from tty,
         # (p)rint pid, and run in (n)amespace
-        opts = '-cd'
+        opts = '-cd' if mnopts is None else mnopts
         if self.inNamespace:
             opts += 'n'
         # bash -m: enable job control, i: force interactive
         # -s: pass $* to shell, and make process easy to find in ps
         # prompt is set to sentinel chr( 127 )
-        os.environ[ 'PS1' ] = chr( 127 )
-        cmd = [ 'mnexec', opts, 'bash', '--norc', '-mis', 'mininet:' + self.name ]
+        cmd = [ 'mnexec', opts, 'env',  'PS1=' + chr( 127 ),
+                'bash', '--norc', '-mis', 'mininet:' + self.name ]
         # Spawn a shell subprocess in a pseudo-tty, to disable buffering
         # in the subprocess and insulate it from signals (e.g. SIGINT)
         # received by the parent
         master, slave = pty.openpty()
-        self.shell = Popen( cmd, stdin=slave, stdout=slave, stderr=slave,
+        self.shell = self._popen( cmd, stdin=slave, stdout=slave, stderr=slave,
                                   close_fds=False )
-        self.stdin = os.fdopen( master )
+        self.stdin = os.fdopen( master, 'rw' )
         self.stdout = self.stdin
         self.pid = self.shell.pid
         self.pollOut = select.poll()
@@ -160,6 +159,13 @@ class Node( object ):
             self.pollOut.poll()
         self.waiting = False
         self.cmd( 'stty -echo' )
+        self.cmd( 'set +m' )
+
+    def _popen( self, cmd, **params ):
+        """Internal method: spawn and return a process
+            cmd: command to run (list)
+            params: parameters to Popen()"""
+        return Popen( cmd, **params )
 
     def cleanup( self ):
         "Help python collect its garbage."
@@ -205,7 +211,8 @@ class Node( object ):
     def terminate( self ):
         "Send kill signal to Node and clean up after it."
         if self.shell:
-            os.killpg( self.pid, signal.SIGKILL )
+            if self.shell.poll() is None:
+                os.killpg( self.shell.pid, signal.SIGHUP )
         self.cleanup()
 
     def stop( self ):
@@ -238,29 +245,35 @@ class Node( object ):
             # Replace empty commands with something harmless
             cmd = 'echo -n'
         self.lastCmd = cmd
-        if printPid and not isShellBuiltin( cmd ):
-            if len( cmd ) > 0 and cmd[ -1 ] == '&':
-                # print ^A{pid}\n so monitor() can set lastPid
-                cmd += ' printf "\\001%d\n" $! \n'
-            else:
-                cmd = 'mnexec -p ' + cmd
+        # if a builtin command is backgrounded, it still yields a PID
+        if len( cmd ) > 0 and cmd[ -1 ] == '&':
+            # print ^A{pid}\n so monitor() can set lastPid
+            cmd += ' printf "\\001%d\\012" $! '
+        elif printPid and not isShellBuiltin( cmd ):
+            cmd = 'mnexec -p ' + cmd
         self.write( cmd + '\n' )
         self.lastPid = None
         self.waiting = True
 
     def sendInt( self, intr=chr( 3 ) ):
         "Interrupt running command."
+        debug( 'sendInt: writing chr(%d)\n' % ord( intr ) )
         self.write( intr )
 
     def monitor( self, timeoutms=None, findPid=True ):
         """Monitor and return the output of a command.
            Set self.waiting to False if command has completed.
-           timeoutms: timeout in ms or None to wait indefinitely."""
+           timeoutms: timeout in ms or None to wait indefinitely
+           findPid: look for PID from mnexec -p"""
         self.waitReadable( timeoutms )
         data = self.read( 1024 )
+        pidre = r'\[\d+\] \d+\r\n'
         # Look for PID
         marker = chr( 1 ) + r'\d+\r\n'
         if findPid and chr( 1 ) in data:
+            # suppress the job and PID of a backgrounded command
+            if re.findall( pidre, data ):
+                data = re.sub( pidre, '', data )
             # Marker can be read in chunks; continue until all of it is read
             while not re.findall( marker, data ):
                 data += self.read( 1024 )
@@ -277,7 +290,7 @@ class Node( object ):
             data = data.replace( chr( 127 ), '' )
         return data
 
-    def waitOutput( self, verbose=False ):
+    def waitOutput( self, verbose=False, findPid=True ):
         """Wait for a command to complete.
            Completion is signaled by a sentinel character, ASCII(127)
            appearing in the output stream.  Wait for the sentinel and return
@@ -326,18 +339,19 @@ class Node( object ):
             # popen( cmd, arg1, arg2... )
             cmd = list( args )
         # Attach to our namespace  using mnexec -a
-        mncmd = defaults[ 'mncmd' ]
-        del defaults[ 'mncmd' ]
-        cmd = mncmd + cmd
+        cmd = defaults.pop( 'mncmd' ) + cmd
         # Shell requires a string, not a list!
         if defaults.get( 'shell', False ):
             cmd = ' '.join( cmd )
-        return Popen( cmd, **defaults )
+        popen = self._popen( cmd, **defaults )
+        return popen
 
     def pexec( self, *args, **kwargs ):
         """Execute a command using popen
            returns: out, err, exitcode"""
-        popen = self.popen( *args, **kwargs)
+        popen = self.popen( *args, stdin=PIPE, stdout=PIPE, stderr=PIPE,
+                           **kwargs )
+        # Warning: this can fail with large numbers of fds!
         out, err = popen.communicate()
         exitcode = popen.wait()
         return out, err, exitcode
@@ -356,20 +370,22 @@ class Node( object ):
             return max( self.ports.values() ) + 1
         return self.portBase
 
-    def addIntf( self, intf, port=None ):
+    def addIntf( self, intf, port=None, moveIntfFn=moveIntf ):
         """Add an interface.
            intf: interface
-           port: port number (optional, typically OpenFlow port number)"""
+           port: port number (optional, typically OpenFlow port number)
+           moveIntfFn: function to move interface (optional)"""
         if port is None:
             port = self.newPort()
         self.intfs[ port ] = intf
         self.ports[ intf ] = port
         self.nameToIntf[ intf.name ] = intf
         debug( '\n' )
-        debug( 'added intf %s:%d to node %s\n' % ( intf, port, self.name ) )
+        debug( 'added intf %s (%d) to node %s\n' % (
+                intf, port, self.name ) )
         if self.inNamespace:
             debug( 'moving', intf, 'into namespace for', self.name, '\n' )
-            moveIntf( intf.name, self )
+            moveIntfFn( intf.name, self  )
 
     def defaultIntf( self ):
         "Return interface for lowest port"
@@ -601,6 +617,12 @@ class CPULimitedHost( Host ):
         # still does better with larger period values.
         self.period_us = kwargs.get( 'period_us', 100000 )
         self.sched = sched
+        if self.sched == 'rt':
+            release = quietRun( 'uname -r' ).strip('\r\n')
+            output = quietRun( 'grep CONFIG_RT_GROUP_SCHED /boot/config-%s' % release )
+            if output == '# CONFIG_RT_GROUP_SCHED is not set\n':
+                error( '\n*** error: please enable RT_GROUP_SCHED in your kernel\n' )
+                exit( 1 )
         self.rtprio = 20
 
     def cgroupSet( self, param, value, resource='cpu' ):
@@ -656,7 +678,7 @@ class CPULimitedHost( Host ):
         "Internal method: return parameters for RT bandwidth"
         pstr, qstr = 'rt_period_us', 'rt_runtime_us'
         # RT uses wall clock time for period and quota
-        quota = int( self.period_us * f * numCores() )
+        quota = int( self.period_us * f )
         return pstr, qstr, self.period_us, quota
 
     def cfsInfo( self, f):
@@ -888,7 +910,9 @@ class UserSwitch( Switch ):
 
     def connected( self ):
         "Is the switch connected to a controller?"
-        return 'remote.is-connected=true' in self.dpctl( 'status' )
+        status = self.dpctl( 'status' )
+        return ( 'remote.is-connected=true' in status and
+                 'local.is-connected=true' in status )
 
     @staticmethod
     def TCReapply( intf ):
@@ -924,7 +948,6 @@ class UserSwitch( Switch ):
                             for c in controllers ] )
         ofdlog = '/tmp/' + self.name + '-ofd.log'
         ofplog = '/tmp/' + self.name + '-ofp.log'
-        self.cmd( 'ifconfig lo up' )
         intfs = [ str( i ) for i in self.intfList() if not i.IP() ]
         self.cmd( 'ofdatapath -i ' + ','.join( intfs ) +
                   ' punix:/tmp/' + self.name + ' -d %s ' % self.dpid +
@@ -975,7 +998,6 @@ class OVSLegacyKernelSwitch( Switch ):
     def start( self, controllers ):
         "Start up kernel datapath."
         ofplog = '/tmp/' + self.name + '-ofp.log'
-        quietRun( 'ifconfig lo up' )
         # Delete local datapath if it exists;
         # then create a new one monitoring the given interfaces
         self.cmd( 'ovs-dpctl del-dp ' + self.dp )
@@ -1003,7 +1025,7 @@ class OVSSwitch( Switch ):
     "Open vSwitch switch. Depends on ovs-vsctl."
 
     def __init__( self, name, failMode='secure', datapath='kernel',
-                 inband=False, **params ):
+                 inband=False, protocols=None, **params ):
         """Init.
            name: name for switch
            failMode: controller loss behavior (secure|open)
@@ -1013,6 +1035,7 @@ class OVSSwitch( Switch ):
         self.failMode = failMode
         self.datapath = datapath
         self.inband = inband
+        self.protocols = protocols
 
     @classmethod
     def setup( cls ):
@@ -1092,9 +1115,6 @@ class OVSSwitch( Switch ):
         if self.inNamespace:
             raise Exception(
                 'OVS kernel switch does not work in a namespace' )
-        # We should probably call config instead, but this
-        # requires some rethinking...
-        self.cmd( 'ifconfig lo up' )
         # Annoyingly, --if-exists option seems not to work
         self.cmd( 'ovs-vsctl del-br', self )
         int( self.dpid, 16 ) # DPID must be a hex string
@@ -1102,7 +1122,8 @@ class OVSSwitch( Switch ):
         intfs = ' '.join( '-- add-port %s %s ' % ( self, intf ) +
                           '-- set Interface %s ' % intf +
                           'ofport_request=%s ' % self.ports[ intf ]
-                         for intf in self.intfList() if not intf.IP() )
+                         for intf in self.intfList()
+                         if self.ports[ intf ] and not intf.IP() )
         clist = ' '.join( '%s:%s:%d' % ( c.protocol, c.IP(), c.port )
                          for c in controllers )
         if self.listenPort:
@@ -1130,6 +1151,8 @@ class OVSSwitch( Switch ):
                      'other-config:disable-in-band=true ' % self )
         if self.datapath == 'user':
             cmd += '-- set bridge %s datapath_type=netdev ' % self
+        if self.protocols:
+            cmd += '-- set bridge %s protocols=%s' % ( self, self.protocols )
         # Reconnect quickly to controllers (1s vs. 15s max_backoff)
         for uuid in self.controllerUUIDs():
             if uuid.count( '-' ) != 4:
@@ -1197,7 +1220,6 @@ class IVSSwitch(Switch):
 
         logfile = '/tmp/ivs.%s.log' % self.name
 
-        self.cmd( 'ifconfig lo up' )
         self.cmd( ' '.join(args) + ' >' + logfile + ' 2>&1 </dev/null &' )
 
     def stop( self ):
@@ -1237,7 +1259,6 @@ class Controller( Node ):
         self.protocol = protocol
         Node.__init__( self, name, inNamespace=inNamespace,
                        ip=ip, **params  )
-        self.cmd( 'ifconfig lo up' )  # Shouldn't be necessary
         self.checkListening()
 
     def checkListening( self ):
@@ -1266,7 +1287,7 @@ class Controller( Node ):
         if self.cdir is not None:
             self.cmd( 'cd ' + self.cdir )
         self.cmd( self.command + ' ' + self.cargs % self.port +
-                  ' 1>' + cout + ' 2>' + cout + '&' )
+                  ' 1>' + cout + ' 2>' + cout + ' &' )
         self.execed = False
 
     def stop( self ):
@@ -1354,7 +1375,6 @@ class RemoteController( Controller ):
         if 'Connected' not in listening:
             warn( "Unable to contact the remote controller"
                   " at %s:%d\n" % ( self.ip, self.port ) )
-
 
 def DefaultController( name, order=[ Controller, OVSController ], **kwargs ):
     "find any controller that is available and run it"

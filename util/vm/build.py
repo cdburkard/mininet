@@ -61,10 +61,10 @@ Prompt = '\$ '              # Shell prompt that pexpect will wait for
 isoURLs = {
     'precise32server':
     'http://mirrors.kernel.org/ubuntu-releases/12.04/'
-    'ubuntu-12.04.3-server-i386.iso',
+    'ubuntu-12.04.5-server-i386.iso',
     'precise64server':
     'http://mirrors.kernel.org/ubuntu-releases/12.04/'
-    'ubuntu-12.04.3-server-amd64.iso',
+    'ubuntu-12.04.5-server-amd64.iso',
     'quantal32server':
     'http://mirrors.kernel.org/ubuntu-releases/12.10/'
     'ubuntu-12.10-server-i386.iso',
@@ -192,7 +192,10 @@ def findiso( flavor ):
     if not path.exists( iso ) or ( stat( iso )[ ST_MODE ] & 0777 != 0444 ):
         log( '* Retrieving', url )
         run( 'curl -C - -o %s %s' % ( iso, url ) )
-        if 'ISO' not in run( 'file ' + iso ):
+        # Make sure the file header/type is something reasonable like
+        # 'ISO' or 'x86 boot sector', and not random html or text
+        result = run( 'file ' + iso )
+        if 'ISO' not in result and 'boot' not in result:
             os.remove( iso )
             raise Exception( 'findiso: could not download iso from ' + url )
         # Write-protect iso, signaling it is complete
@@ -238,7 +241,7 @@ def extractKernel( image, flavor, imageDir=VMImageDir ):
     # Assume kernel is in partition 1/boot/vmlinuz*generic for now
     part = nbd + 'p1'
     mnt = mkdtemp()
-    srun( 'mount -o ro %s %s' % ( part, mnt  ) )
+    srun( 'mount -o ro,noload %s %s' % ( part, mnt  ) )
     kernsrc = glob( '%s/boot/vmlinuz*generic' % mnt )[ 0 ]
     initrdsrc = glob( '%s/boot/initrd*generic' % mnt )[ 0 ]
     srun( 'cp %s %s' % ( initrdsrc, initrd ) )
@@ -725,9 +728,12 @@ def generateOVF( name, osname, osid, diskname, disksize, mem=1024, cpus=1,
 
 def qcow2size( qcow2 ):
     "Return virtual disk size (in bytes) of qcow2 image"
-    output = check_output( [ 'file', qcow2 ] )
-    assert 'QCOW' in output
-    bytes = int( re.findall( '(\d+) bytes', output )[ 0 ] )
+    output = check_output( [ 'qemu-img', 'info', qcow2 ] )
+    try:
+        assert 'format: qcow' in output
+        bytes = int( re.findall( '(\d+) bytes', output )[ 0 ] )
+    except:
+        raise Exception( 'Could not determine size of %s' % qcow2 )
     return bytes
 
 

@@ -36,7 +36,8 @@ import atexit
 
 from mininet.log import info, output, error
 from mininet.term import makeTerms, runX11
-from mininet.util import quietRun, isShellBuiltin, dumpNodeConnections
+from mininet.util import ( quietRun, isShellBuiltin, dumpNodeConnections,
+                         dumpPorts )
 
 class CLI( Cmd ):
     "Simple command-line interface to talk to nodes."
@@ -75,7 +76,7 @@ class CLI( Cmd ):
                 for node in self.mn.values():
                     while node.waiting:
                         node.sendInt()
-                        node.monitor()
+                        node.waitOutput()
                 if self.isatty():
                     quietRun( 'stty echo sane intr "^C"' )
                 self.cmdloop()
@@ -126,6 +127,10 @@ class CLI( Cmd ):
         "List all nodes."
         nodes = ' '.join( sorted( self.mn ) )
         output( 'available nodes are: \n%s\n' % nodes )
+
+    def do_ports( self, line ):
+        "display ports and interfaces for each switch"
+        dumpPorts( self.mn.switches )
 
     def do_net( self, _line ):
         "List network connections."
@@ -331,6 +336,11 @@ class CLI( Cmd ):
         elapsed = time.time() - start
         self.stdout.write("*** Elapsed time: %0.6f secs\n" % elapsed)
 
+    def do_links( self, line ):
+        "Report on links"
+        for link in self.mn.links:
+            print link, link.status()
+
     def default( self, line ):
         """Called on an input line when the command prefix is not recognized.
         Overridden to run shell commands when a node is the first CLI argument.
@@ -394,6 +404,12 @@ class CLI( Cmd ):
                 # it's possible to interrupt ourselves after we've
                 # read data but before it has been printed.
                 node.sendInt()
+
+    def precmd( self, line ):
+        "allow for comments in the cli"
+        if '#' in line:
+            line = line.split( '#' )[ 0 ]
+        return line
 
 
 # Helper functions
