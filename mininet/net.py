@@ -106,7 +106,7 @@ from mininet.util import macColonHex, ipStr, ipParse, netParse, ipAdd
 from mininet.term import cleanUpScreens, makeTerms
 
 # Mininet version: should be consistent with README and LICENSE
-VERSION = "2.1.0+"
+VERSION = "2.2.0b0"
 
 class Mininet( object ):
     "Network emulation with hosts spawned in network namespaces."
@@ -321,25 +321,36 @@ class Mininet( object ):
         "return (key,value) tuple list for every node in net"
         return zip( self.keys(), self.values() )
 
+    @staticmethod
+    def randMac():
+        "Return a random, non-multicast MAC address"
+        return macColonHex( random.randint(1, 2**48 - 1) & 0xfeffffffffff  |
+                            0x020000000000 )
+    
     def addLink( self, node1, node2, port1=None, port2=None,
                  cls=None, **params ):
         """"Add a link from node1 to node2
-            node1: source node
-            node2: dest node
-            port1: source port
-            port2: dest port
+            node1: source node (or name)
+            node2: dest node (or name)
+            port1: source port (optional)
+            port2: dest port (optional)
+            cls: link class (optional)
+            params: additional link params (optional)
             returns: link object"""
-        mac1 = macColonHex( random.randint(1, 2**48 - 1) & 0xfeffffffffff  | 0x020000000000 )
-        mac2 = macColonHex( random.randint(1, 2**48 - 1) & 0xfeffffffffff  | 0x020000000000 )
-        defaults = { 'port1': port1,
-                     'port2': port2,
-                     'addr1': mac1,
-                     'addr2': mac2,
-                     'intf': self.intf }
-        defaults.update( params )
-        if not cls:
-            cls = self.link
-        link = cls( node1, node2, **defaults )
+        # Accept node objects or names
+        node1 = node1 if type( node1 ) != str else self[ node1 ]
+        node2 = node2 if type( node2 ) != str else self[ node2 ]
+        options = dict( params )
+        # Port is optional
+        if port1 is not None:
+            options.setdefault( 'port1', port1 )
+        if port2 is not None:
+            options.setdefault( 'port2', port2 )
+        # Set default MAC - this should probably be in Link
+        options.setdefault( 'addr1', self.randMac() )
+        options.setdefault( 'addr2', self.randMac() )
+        cls = self.link if cls is None else cls
+        link = cls( node1, node2, **options )
         self.links.append( link )
         return link
 
@@ -397,12 +408,10 @@ class Mininet( object ):
             info( switchName + ' ' )
 
         info( '\n*** Adding links:\n' )
-        for srcName, dstName in topo.links(sort=True):
-            src, dst = self.nameToNode[ srcName ], self.nameToNode[ dstName ]
-            params = topo.linkInfo( srcName, dstName )
-            srcPort, dstPort = topo.port( srcName, dstName )
-            self.addLink( src, dst, srcPort, dstPort, **params )
-            info( '(%s, %s) ' % ( src.name, dst.name ) )
+        for srcName, dstName, params in topo.links(
+                sort=True, withInfo=True ):
+            self.addLink( **params )
+            info( '(%s, %s) ' % ( srcName, dstName ) )
 
         info( '\n' )
 
@@ -688,11 +697,15 @@ class Mininet( object ):
 
     # XXX This should be cleaned up
 
-    def iperf( self, hosts=None, l4Type='TCP', udpBw='10M', format=None ):
+    def iperf( self, hosts=None, l4Type='TCP', udpBw='10M', format=None,
+               seconds=5):
         """Run iperf between two hosts.
            hosts: list of hosts; if None, uses opposite hosts
            l4Type: string, one of [ TCP, UDP ]
-           returns: results two-element array of [ server, client ] speeds
+           udpBw: bandwidth target for UDP test
+           format: iperf format argument if any
+           seconds: iperf time to transmit
+           returns: two-element array of [ server, client ] speeds
            note: send() is buffered, so client rate can be much higher than
            the actual transmission rate; on an unloaded system, server
            rate should be much closer to the actual receive rate"""
@@ -725,8 +738,8 @@ class Mininet( object ):
                     'sh -c "echo A | telnet -e A %s 5001"' % server.IP()):
                 info( 'Waiting for iperf to start up...' )
                 sleep(.5)
-        cliout = client.cmd( iperfArgs + '-t 5 -c ' + server.IP() + ' ' +
-                             bwArgs )
+        cliout = client.cmd( iperfArgs + '-t %d -c ' % seconds +
+                             server.IP() + ' ' + bwArgs )
         debug( 'Client output: %s\n' % cliout )
         server.sendInt()
         servout += server.waitOutput()
