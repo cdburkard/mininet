@@ -83,7 +83,7 @@ from mininet.util import quietRun, makeIntfPair, errRun, retry
 from mininet.examples.clustercli import CLI
 from mininet.log import setLogLevel, debug, info, error
 
-from signal import signal, SIGINT, SIGHUP, SIG_IGN
+from signal import signal, SIGINT, SIG_IGN
 from subprocess import Popen, PIPE, STDOUT
 import os
 from random import randrange
@@ -125,21 +125,20 @@ class RemoteMixin( object ):
         self.server = server if server else 'localhost'
         self.serverIP = serverIP if serverIP else self.findServerIP( self.server )
         self.user = user if user else self.findUser()
+        self.controlPath = controlPath
+        self.splitInit = splitInit
         if self.user and self.server != 'localhost':
             self.dest = '%s@%s' % ( self.user, self.serverIP )
-            self.isRemote = True
-        else:
-            self.isRemote = False
-            self.dest = None
-        self.controlPath = controlPath
-        self.sshcmd = []
-        if hasattr( self, 'server' ) and self.isRemote:
             self.sshcmd = [ 'sudo', '-E', '-u', self.user ] + self.sshbase
             if self.controlPath:
                 self.sshcmd += [ '-o', 'ControlPath=' + self.controlPath,
-                                               '-o', 'ControlMaster=auto' ]
+                                 '-o', 'ControlMaster=auto' ]
             self.sshcmd = self.sshcmd + [ self.dest ]
-        self.splitInit = splitInit
+            self.isRemote = True
+        else:
+            self.dest = None
+            self.sshcmd = []
+            self.isRemote = False
         super( RemoteMixin, self ).__init__( name, **kwargs )
 
     @staticmethod
@@ -175,7 +174,7 @@ class RemoteMixin( object ):
     # Command support via shell process in namespace
     def startShell( self, *args, **kwargs ):
         "Start a shell process for running commands"
-        if hasattr( self, 'server' ) and self.isRemote:
+        if self.isRemote:
             kwargs.update( mnopts='-c' )
         super( RemoteMixin, self ).startShell( *args, **kwargs )
         if self.splitInit:
@@ -225,7 +224,7 @@ class RemoteMixin( object ):
             returns: Popen() object"""
         if type( cmd ) is str:
             cmd = cmd.split()
-        if hasattr( self, 'server' ) and self.isRemote:
+        if self.isRemote:
             if sudo:
                 cmd = [ 'sudo', '-E' ] + cmd
             if tt:
@@ -340,6 +339,13 @@ class RemoteLink( Link ):
     def makeTunnel( self, node1, node2, intfname1, intfname2,
                     addr1=None, addr2=None ):
         "Make a tunnel across switches on different servers"
+        # We should never try to create a tunnel to ourselves!
+        assert node1.server != 'localhost' or node2.server != 'localhost'
+        # And we can't ssh into this server remotely as 'localhost',
+        # so try again swappping node1 and node2
+        if node2.server == 'localhost':
+            return self.makeTunnel( node2, node1, intfname2, intfname1,
+                                    addr2, addr1 )
         # 1. Create tap interfaces
         for node in node1, node2:
             # For now we are hard-wiring tap9, which we will rename
@@ -665,7 +671,7 @@ class MininetCluster( Mininet ):
                                  switches=self.topo.switches(),
                                  links=self.topo.links() )
         for node in nodes:
-            config = self.topo.node_info[ node ]
+            config = self.topo.nodeInfo( node )
             # keep local server name consistent accross nodes
             if 'server' in config.keys() and config[ 'server' ] == None:
                 config[ 'server' ] = 'localhost'
