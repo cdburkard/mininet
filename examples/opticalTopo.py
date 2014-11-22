@@ -203,11 +203,18 @@ def switchJSON( switch ):
     configDict[ 'ports' ] = ports
     return configDict
 
-def startOE( net, controllerPort=6633 ):
+
+def startOE( net, controllerIP=None, controllerPort=None ):
     opticalJSON = {}
     linkConfig = []
     devices = []
     
+    # if we are not given a controller IP or Port, we use the first found in Mininet
+    if controllerIP is None:
+        controllerIP = net.controllers[ 0 ].ip
+    if controllerPort is None:
+        controllerPort = net.controllers[ 0 ].port
+
     for switch in net.switches:
         if isinstance( switch, opticalSwitch ):
             devices.append( switch.json() )
@@ -232,7 +239,7 @@ def startOE( net, controllerPort=6633 ):
     configGen = findDir( 'LINC-config-generator' )
     if not configGen:
         error( '***ERROR: please install LINC-config-generator in users home directory\n' )
-    print quietRun( '%s/config_generator TopoConfig.json %s/sys.config.template localhost %d' %  ( configGen, configGen, controllerPort ), shell=True )
+    print quietRun( '%s/config_generator TopoConfig.json %s/sys.config.template %s %s' %  ( configGen, configGen, controllerIP, controllerPort ), shell=True )
     lincDir = findDir( 'linc-oe2' )
     if not lincDir:
         lincDir = findDir( 'linc-oe' )
@@ -244,7 +251,7 @@ def startOE( net, controllerPort=6633 ):
     info( '***waiting for linc-oe to start...\n' )
     # We have to wait for all of the tap interfaces to be displayed before trying to connect to them. Need to make a method to do this.
     sleep( 5 )
-    print quietRun( '$ONOS_ROOT/tools/test/bin/onos-topo-cfg localhost Topology.json', shell=True )
+    print quietRun( '$ONOS_ROOT/tools/test/bin/onos-topo-cfg %s Topology.json' % controllerIP, shell=True )
     info( '***adding tap interfaces to existing switches...\n' )
     for link in net.links:
         if isinstance( link, opticalLink ):
@@ -259,7 +266,8 @@ def startOE( net, controllerPort=6633 ):
 
 
 def stopOE():
-    quietRun( 'rel/linc/bin/linc stop', shell=True )
+    lincDir = findDir( 'linc-oe' )
+    quietRun( '%s/rel/linc/bin/linc stop' % lincDir, shell=True )
 
 # need a check in place if multiple paths are found
 # currently only look in home directory to make the search faster
@@ -273,7 +281,7 @@ def findDir( directory ):
     else:
         return Dir
 
-# modify this to look in any file. by default, look in default releases/1.0 location
+# TODO: modify this to look in any file. by default, look in default releases/1.0 location
 def findTap( node, port ):
     switch=False
     portLine = ''
@@ -312,7 +320,6 @@ def findTap( node, port ):
 
 if __name__ == '__main__':
     setLogLevel( 'info' )
-    # currently this is not being used. but it should work
     net = Mininet( topo=opticalTestTopo(), controller=RemoteController )
     net.start()
     startOE( net )
