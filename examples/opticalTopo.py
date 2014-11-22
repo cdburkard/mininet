@@ -15,12 +15,10 @@ such as startOE, stopOE, opticalLink, and opticalSwitch
 
             TODO
         -----------
-    - should make a method to check if all tap interfaces are up
     - clean up files after runtime
         - maybe save the old files in a separate directory?
     - modify script to allow startOE to run before net.start()
     - add ONOS as a controller
-        - will need to wait until onos-rest is installed before attempting to push topology
 
             Usage:
         ------------
@@ -61,27 +59,25 @@ from mininet.topo import Topo
 from mininet.util import quietRun
 from mininet.net import Mininet
 from mininet.log import  setLogLevel, info, error
-import  json
+import json
 from mininet.link import Link, Intf
 from mininet.cli import CLI
 
 class opticalSwitch( Switch ):
 
-    def __init__( self, name, latitude=None, longitude=None, dpid=None, allowed=True, switchType='ROADM', annotations={}, **params ):
+    def __init__( self, name, dpid=None, allowed=True,
+                  switchType='ROADM', annotations={}, **params ):
         params[ 'inNamespace' ] = False
         Switch.__init__( self, name, dpid=dpid, **params )
         self.name = name
         self.annotations = annotations
-        switchParams = {}
-        switchParams.setdefault( 'numRegen', 0 )
-        self.switchParams = switchParams
-        self.latitude = latitude
-        self.longitude = longitude
         self.allowed = allowed
         self.switchType = switchType
-        self.configDict = {}
+        self.configDict = {} # dictionary that holds all of the JSON configuration data
 
     def start( self, *opts, **params ):
+        '''Instead of starting a virtual switch, we build the JSON
+           dictionary for the emulated optical switch'''
         self.configDict[ 'uri' ] = 'of:' + self.dpid
         self.configDict[ 'annotations' ] = self.annotations
         self.configDict[ 'annotations' ].setdefault( 'name', self.name )
@@ -98,31 +94,39 @@ class opticalSwitch( Switch ):
 
 
     def json( self ):
-        'use this to return dict for switch'
+        "return json configuration dictionary for switch"
         return self.configDict
+    
     def terminate( self ):
         pass
 
 class opticalLink( Link ):
 
-    def __init__( self, node1, node2, port1=None, port2=None, allowed=True, intfName1=None, intfName2=None, linkType='OPTICAL', annotations={}, speed1=0, speed2=0, **params ):
+    def __init__( self, node1, node2, port1=None, port2=None, allowed=True,
+                  intfName1=None, intfName2=None, linkType='OPTICAL',
+                  annotations={}, speed1=0, speed2=0, **params ):
+        "Creates a dummy link without a virtual ethernet pair."
         self.allowed = allowed
         self.annotations = annotations
         self.linkType = linkType
         params1 = { 'speed': speed1 }
         params2 = { 'speed': speed2 }
+        
         if isinstance( node1, opticalSwitch ):
             cls1 = opticalIntf
         else:
             cls1 = Intf
-            # bad hack to stop error message from appearing when we try to set up intf in a packet switch, and there is no interface there( because we do not run makeIntfPair ) could probably change makeIntfPair to work
+            # bad hack to stop error message from appearing when we try to set up intf in a packet switch, 
+            # and there is no interface there( because we do not run makeIntfPair ) could probably change makeIntfPair to work
             intfName1 = 'lo'
         if isinstance( node2, opticalSwitch ):
             cls2 = opticalIntf
         else:
             cls2 = Intf
             intfName2 = 'lo'
-        Link.__init__( self, node1, node2, port1=port1, port2=port2, intfName1=intfName1, intfName2=intfName2, cls1=cls1, cls2=cls2, params1=params1, params2=params2 )
+        Link.__init__( self, node1, node2, port1=port1, port2=port2,
+                       intfName1=intfName1, intfName2=intfName2, cls1=cls1,
+                       cls2=cls2, params1=params1, params2=params2 )
         
 
     @classmethod
@@ -130,16 +134,20 @@ class opticalLink( Link ):
         pass
 
     def json( self ):
+        "build and return the json configuration dictionary for this link"
         configData = {}
-        configData[ 'src' ] = 'of:' +  self.intf1.node.dpid + '/%s' % self.intf1.node.ports[ self.intf1 ]
-        configData[ 'dst' ] = 'of:' +  self.intf2.node.dpid + '/%s' % self.intf2.node.ports[ self.intf2 ]
+        configData[ 'src' ] = ( 'of:' +  self.intf1.node.dpid + 
+                                '/%s' % self.intf1.node.ports[ self.intf1 ] )
+        configData[ 'dst' ] = ( 'of:' +  self.intf2.node.dpid +
+                                '/%s' % self.intf2.node.ports[ self.intf2 ] )
         configData[ 'type' ] = self.linkType
         configData[ 'annotations' ] = self.annotations
         return configData
 
 class opticalIntf( Intf ):
 
-    def __init__( self, name=None, node=None, speed=100000,  port=None, link=None, **params ):
+    def __init__( self, name=None, node=None, speed=100000, 
+                  port=None, link=None, **params ):
         self.node = node
         self.speed = speed
         self.port = port
@@ -149,6 +157,7 @@ class opticalIntf( Intf ):
         self.params = params
 
     def json( self ):
+        "build and return the JSON information for this interface( not used? )"
         configDict = {}
         configDict[ 'port' ] = self.port
         configDict[ 'speed' ] = self.speed
@@ -156,30 +165,11 @@ class opticalIntf( Intf ):
         return configDict
 
     def config( self, *args, **kwargs ):
+        "dont configure a dummy interface"
         pass
 
-    
-
-class opticalTestTopo( Topo ):
-
-    def build( self ):
-         opticalAnn = { 'optical.waves': 80, 'optical.type': "WDM", 'durable': True }
-         switchAnn = { 'bandwidth': 100000, 'optical.type': 'cross-connect', 'durable': True }
-         h1 = self.addHost( 'h1' )
-         h2 = self.addHost( 'h2' )
-         s1 = self.addSwitch( 's1' )
-         s2 = self.addSwitch( 's2' )
-         O4 = self.addSwitch( 'O4', cls=opticalSwitch )
-         O5 = self.addSwitch( 'O5', cls=opticalSwitch )
-         O6 = self.addSwitch( 'O6', cls=opticalSwitch )
-         self.addLink( O4, O5, cls=opticalLink, annotations=opticalAnn )
-         self.addLink( O5, O6, cls=opticalLink, annotations=opticalAnn )
-         self.addLink( s1, O4, cls=opticalLink, annotations=switchAnn )
-         self.addLink( s2, O6, cls=opticalLink, annotations=switchAnn )
-         self.addLink( h1, s1 )
-         self.addLink( h2, s2 )
-
 def switchJSON( switch ):
+    "returns the json configuration for a packet switch"
     configDict = {}
     configDict[ 'uri' ] = 'of:' + switch.dpid
     configDict[ 'mac' ] = quietRun( 'cat /sys/class/net/%s/address' % switch.name ).strip( '\n' ).translate( None, ':' )
@@ -205,6 +195,7 @@ def switchJSON( switch ):
 
 
 def startOE( net, controllerIP=None, controllerPort=None ):
+    "Start the LINC optical emulator within a mininet instance"
     opticalJSON = {}
     linkConfig = []
     devices = []
@@ -228,30 +219,53 @@ def startOE( net, controllerIP=None, controllerPort=None ):
 
     opticalJSON[ 'links' ] = linkConfig
 
+    if not quietRun( 'echo $ONOS_ROOT' ).strip( '\n' ):
+        error( 'Please set ONOS_ROOT environment variable!\n' )
+        return False
+
     with open( 'Topology.json', 'w' ) as outfile:
         json.dump( opticalJSON, outfile, indent=4, separators=(',', ': ') )
-    
-    if quietRun( 'echo $ONOS_ROOT' ).strip( '\n' ) is None:
-        error( 'Please set ONOS_ROOT environment variable!\n' )
 
-    print quietRun( '$ONOS_ROOT/tools/test/bin/onos-oecfg ./Topology.json > TopoConfig.json', shell=True )
-    info( '***creating sys.config...\n' )
+    info( '***creating Topology file\n' )
+    output = quietRun( '$ONOS_ROOT/tools/test/bin/onos-oecfg ./Topology.json > TopoConfig.json', shell=True )
+    if output:
+        error( '***ERROR: error creating topology file: %s ' % output )
+        return False
+
     configGen = findDir( 'LINC-config-generator' )
     if not configGen:
         error( '***ERROR: please install LINC-config-generator in users home directory\n' )
-    print quietRun( '%s/config_generator TopoConfig.json %s/sys.config.template %s %s' %  ( configGen, configGen, controllerIP, controllerPort ), shell=True )
+        return False
+
+    info( '***creating sys.config...\n' )
+    output = quietRun( '%s/config_generator TopoConfig.json %s/sys.config.template %s %s'
+                    % ( configGen, configGen, controllerIP, controllerPort ), shell=True )
+    if output:
+        error( '***ERROR: error creating sys.config file: %s ' % output )
+        return False
+
     lincDir = findDir( 'linc-oe2' )
     if not lincDir:
         lincDir = findDir( 'linc-oe' )
     if not lincDir:
         error( '***ERROR: Could not find linc-oe in users home directory\n' )
-    print quietRun( 'cp -v sys.config %s/rel/linc/releases/1.0/' % lincDir, shell=True )
+        return False
+
+    output = quietRun( 'cp -v sys.config %s/rel/linc/releases/1.0/' % lincDir, shell=True ).strip( '\n' )
+    info( output )
     info( '***starting linc OE...\n' )
-    print quietRun( '%s/rel/linc/bin/linc start' % lincDir, shell=True )
+    output = quietRun( '%s/rel/linc/bin/linc start' % lincDir, shell=True )
+    if output:
+        error( '***ERROR: LINC-OE: %s' % output + '\n' )
+        quietRun( '%s/rel/linc/bin/linc stop' % lincDir, shell=True )
+        return False
+    
     info( '***waiting for linc-oe to start...\n' )
-    # We have to wait for all of the tap interfaces to be displayed before trying to connect to them. Need to make a method to do this.
-    sleep( 5 )
-    print quietRun( '$ONOS_ROOT/tools/test/bin/onos-topo-cfg %s Topology.json' % controllerIP, shell=True )
+    waitStarted( net )
+    
+    info( '***pushing Topology file to ONOS\n' )
+    quietRun( '$ONOS_ROOT/tools/test/bin/onos-topo-cfg %s Topology.json' % controllerIP, shell=True )
+    
     info( '***adding tap interfaces to existing switches...\n' )
     for link in net.links:
         if isinstance( link, opticalLink ):
@@ -264,8 +278,27 @@ def startOE( net, controllerIP=None, controllerPort=None ):
                         
     info( '***done\n' )
 
+def waitStarted( net, timeout=None ):
+    "wait until all tap interfaces are available"
+    tapCount = 0
+    time = 0
+    for link in net.links:
+        if isinstance( link, opticalLink ):
+            if link.annotations[ 'optical.type' ] == 'cross-connect':
+                tapCount += 1
+    
+    while True:
+        if str( tapCount ) == quietRun( 'ip addr | grep tap | wc -l', shell=True ).strip( '\n' ):
+            return True
+        if timeout:
+            if time >= timeout:
+                error( '***ERROR: Linc OE did not start within %s seconds' % timeout )
+                return False
+            time += .5
+        sleep( .5 )
 
 def stopOE():
+    "stop the optical emulator"
     lincDir = findDir( 'linc-oe' )
     quietRun( '%s/rel/linc/bin/linc stop' % lincDir, shell=True )
 
@@ -283,6 +316,8 @@ def findDir( directory ):
 
 # TODO: modify this to look in any file. by default, look in default releases/1.0 location
 def findTap( node, port ):
+    '''utility function to parse through a sys.config
+       file to find tap interfaces for a switch'''
     switch=False
     portLine = ''
     intfLines = []
@@ -317,6 +352,25 @@ def findTap( node, port ):
     for intfLine in intfLines:
         if 'port,%s' % port in intfLine:
             return re.findall( 'tap\d+', intfLine )[ 0 ]
+
+class opticalTestTopo( Topo ):
+
+    def build( self ):
+        opticalAnn = { 'optical.waves': 80, 'optical.type': "WDM", 'durable': True }
+        switchAnn = { 'bandwidth': 100000, 'optical.type': 'cross-connect', 'durable': True }
+        h1 = self.addHost( 'h1' )
+        h2 = self.addHost( 'h2' )
+        s1 = self.addSwitch( 's1' )
+        s2 = self.addSwitch( 's2' )
+        O4 = self.addSwitch( 'O4', cls=opticalSwitch )
+        O5 = self.addSwitch( 'O5', cls=opticalSwitch )
+        O6 = self.addSwitch( 'O6', cls=opticalSwitch )
+        self.addLink( O4, O5, cls=opticalLink, annotations=opticalAnn )
+        self.addLink( O5, O6, cls=opticalLink, annotations=opticalAnn )
+        self.addLink( s1, O4, cls=opticalLink, annotations=switchAnn )
+        self.addLink( s2, O6, cls=opticalLink, annotations=switchAnn )
+        self.addLink( h1, s1 )
+        self.addLink( h2, s2 )
 
 if __name__ == '__main__':
     setLogLevel( 'info' )
