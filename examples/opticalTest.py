@@ -1,6 +1,6 @@
 #!/usr/bin/python
 
-from opticalTopo import opticalSwitch, opticalLink, startOE, stopOE
+from opticalUtils import opticalSwitch, opticalLink, startOE, stopOE
 from mininet.topo import Topo
 from mininet.log import setLogLevel
 from mininet.net import Mininet

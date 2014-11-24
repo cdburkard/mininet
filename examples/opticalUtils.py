@@ -8,8 +8,8 @@ such as startOE, stopOE, opticalLink, and opticalSwitch
 
 - $ONOS_ROOT ust be set
 - Need to run with sudo -E to preserve ONOS_ROOT env var
-- Currently, we assume the LINC-Config-Generator is in the home directory
-- We also assume linc-oe is in the home directory
+- We assume LINC-Config-Generator is named LINC-Config-Generator
+- We also assume linc-oe is named linc-oe
 - LINC-config-generator and linc-oe must be subdirectories of the user's
   home directory
 
@@ -18,7 +18,7 @@ such as startOE, stopOE, opticalLink, and opticalSwitch
     - clean up files after runtime
         - maybe save the old files in a separate directory?
     - modify script to allow startOE to run before net.start()
-    - add ONOS as a controller
+    - add ONOS as a controller in script
 
             Usage:
         ------------
@@ -58,7 +58,7 @@ from mininet.node import Switch, RemoteController
 from mininet.topo import Topo
 from mininet.util import quietRun
 from mininet.net import Mininet
-from mininet.log import  setLogLevel, info, error
+from mininet.log import  setLogLevel, info, error, warn
 import json
 from mininet.link import Link, Intf
 from mininet.cli import CLI
@@ -117,7 +117,7 @@ class opticalLink( Link ):
         else:
             cls1 = Intf
             # bad hack to stop error message from appearing when we try to set up intf in a packet switch, 
-            # and there is no interface there( because we do not run makeIntfPair ) could probably change makeIntfPair to work
+            # and there is no interface there( because we do not run makeIntfPair ). This way, we just set lo up
             intfName1 = 'lo'
         if isinstance( node2, opticalSwitch ):
             cls2 = opticalIntf
@@ -146,7 +146,7 @@ class opticalLink( Link ):
 
 class opticalIntf( Intf ):
 
-    def __init__( self, name=None, node=None, speed=100000, 
+    def __init__( self, name=None, node=None, speed=0, 
                   port=None, link=None, **params ):
         self.node = node
         self.speed = speed
@@ -188,7 +188,7 @@ def switchJSON( switch ):
         portDict[ 'type' ] = 'FIBER' if isinstance( intf.link, opticalLink ) else 'COPPER'
         intfList = [ intf.link.intf1, intf.link.intf2 ]
         intfList.remove( intf )
-        portDict[ 'speed' ] = intfList[ 0 ].speed if isinstance( intf.link, opticalLink ) else 10000 # need to look at this. probably shouldnt have a default value
+        portDict[ 'speed' ] = intfList[ 0 ].speed if isinstance( intf.link, opticalLink ) else 0
         ports.append( portDict )
     configDict[ 'ports' ] = ports
     return configDict
@@ -252,7 +252,7 @@ def startOE( net, controllerIP=None, controllerPort=None ):
         return False
 
     output = quietRun( 'cp -v sys.config %s/rel/linc/releases/1.0/' % lincDir, shell=True ).strip( '\n' )
-    info( output )
+    info( '***moving sys.config: ', output + '\n' )
     info( '***starting linc OE...\n' )
     output = quietRun( '%s/rel/linc/bin/linc start' % lincDir, shell=True )
     if output:
@@ -264,7 +264,11 @@ def startOE( net, controllerIP=None, controllerPort=None ):
     waitStarted( net )
     
     info( '***pushing Topology file to ONOS\n' )
-    quietRun( '$ONOS_ROOT/tools/test/bin/onos-topo-cfg %s Topology.json' % controllerIP, shell=True )
+    output = quietRun( '$ONOS_ROOT/tools/test/bin/onos-topo-cfg %s Topology.json' % controllerIP, shell=True )
+    # successful output contains the two characters '{}'
+    # if there is more output than this, there is an issue
+    if output.strip( '{}' ):
+        warn( '***WARNING: could not push topology file to ONOS: %s' % output )
     
     info( '***adding tap interfaces to existing switches...\n' )
     for link in net.links:
@@ -274,10 +278,9 @@ def startOE( net, controllerIP=None, controllerPort=None ):
                     if not isinstance( intf, opticalIntf ):
                         intfList = [ intf.link.intf1, intf.link.intf2 ]
                         intfList.remove( intf )
-                        intf.node.attach( findTap( intfList[ 0 ].node, intfList[ 0 ].node.ports[ intfList[ 0 ] ] ) )
+                        intf2 = intfList[ 0 ]
+                        intf.node.attach( findTap( intf2.node, intf2.node.ports[ intf2 ] ) )
                         
-    info( '***done\n' )
-
 def waitStarted( net, timeout=None ):
     "wait until all tap interfaces are available"
     tapCount = 0
@@ -302,33 +305,36 @@ def stopOE():
     lincDir = findDir( 'linc-oe' )
     quietRun( '%s/rel/linc/bin/linc stop' % lincDir, shell=True )
 
-# need a check in place if multiple paths are found
-# currently only look in home directory to make the search faster
 def findDir( directory ):
     "finds and returns the path of any directory in the user's home directory"
     user = quietRun( 'who am i' ).split()[ 0 ]
     homeDir = '/home/' + user
     Dir = quietRun( 'find %s -name %s' % ( homeDir, directory ) ).strip( '\n' )
+    DirList = Dir.split( '\n' )
     if not Dir:
         return None
+    elif len( DirList ) > 1 :
+        warn( '***WARNING: found multiple instances of %s. using %s\n'
+                 % ( directory, DirList[ 0 ] ) )
+        return DirList[ 0 ]
     else:
         return Dir
 
-# TODO: modify this to look in any file. by default, look in default releases/1.0 location
-def findTap( node, port ):
+def findTap( node, port, path=None ):
     '''utility function to parse through a sys.config
        file to find tap interfaces for a switch'''
     switch=False
     portLine = ''
     intfLines = []
-    lincDir = findDir( 'linc-oe2' )
-    if not lincDir:
-        lincDir = findDir( 'linc-oe' )
-    if not lincDir:
-        error( '***ERROR: Could not find linc-oe in users home directory\n' )
-        return None
 
-    with open( '%s/rel/linc/releases/1.0/sys.config' % lincDir ) as f:
+    if path is None:
+        lincDir = findDir( 'linc-oe' )
+        if not lincDir:
+            error( '***ERROR: Could not find linc-oe in users home directory\n' )
+            return None
+        path = '%s/rel/linc/releases/1.0/sys.config' % lincDir
+
+    with open( path ) as f:
         for line in f:
             if 'tap' in line:
                 intfLines.append( line )
