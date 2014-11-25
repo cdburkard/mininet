@@ -155,9 +155,10 @@ class opticalIntf( Intf ):
         self.name = name
         node.addIntf( self, port=port )
         self.params = params
+        self.ip = None
 
     def json( self ):
-        "build and return the JSON information for this interface( not used? )"
+        "build and return the JSON information for this interface( not used right now )"
         configDict = {}
         configDict[ 'port' ] = self.port
         configDict[ 'speed' ] = self.speed
