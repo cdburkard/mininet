@@ -13,6 +13,7 @@ nothing irreplaceable!
 from subprocess import Popen, PIPE, check_output as co
 import time
 
+from mininet.examples.opticalUtils import findDir
 from mininet.log import info
 from mininet.term import cleanUpScreens
 
@@ -92,4 +93,9 @@ def cleanup():
     killprocs( '.ssh/mn')
     sh( 'rm -f ~/.ssh/mn/*' )
     
+    info( 'Shutting down Linc-OE\n' )
+    lincDir = findDir( 'linc-oe' )
+    sh( '%s/rel/linc/bin/linc stop' % lincDir )
+    killprocs( 'linc' )
+
     info( "*** Cleanup complete.\n" )
